@@ -101,6 +101,10 @@ body.no-fx .orb,body.no-fx #particles{display:none}
 .btn .ic{font-size:16px;line-height:1}
 .edit-on .editable-only{display:inline-flex}
 .editable-only{display:none}
+.netstatus{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600;color:var(--ink-soft);background:var(--card-solid);border:1px solid var(--line);border-radius:999px;padding:8px 14px;box-shadow:var(--shadow-sm)}
+.ns-dot{width:9px;height:9px;border-radius:50%;flex:none}
+@keyframes nspulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.25);opacity:.7}}
+body.tv .netstatus{display:none}
 
 /* ---- Hero progress strip ---- */
 .hero-strip{background:var(--card);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border:1px solid var(--line);border-radius:var(--radius);padding:22px clamp(18px,2.4vw,34px);box-shadow:var(--shadow-md);margin-bottom:22px;position:relative;overflow:hidden}
@@ -421,6 +425,7 @@ body.tv .lb-list::after{content:"";display:block}
       </div>
     </div>
     <div class="controls">
+      <span class="netstatus" id="netStatus"><span class="ns-dot" style="background:#9C8E78"></span>Starting…</span>
       <button class="btn editable-only" onclick="openAdd()"><span class="ic">＋</span> Add Participant</button>
       <button class="btn hide-tv" id="editBtn" onclick="toggleEdit()"><span class="ic">✎</span> <span id="editLbl">Edit Mode</span></button>
       <button class="btn ghost hide-tv" onclick="openSettings()"><span class="ic">⚙</span> Customize</button>
@@ -629,6 +634,9 @@ body.tv .lb-list::after{content:"";display:block}
 
 <div class="toast" id="toast"></div>
 
+<!-- Firebase (shared cloud data). Safe to leave even in local mode. -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <script>
 /* ============================== STATE ============================== */
 const KEY='pentecost_festival_2026_v1';
@@ -664,13 +672,88 @@ const DEFAULT={
   ],
   days:{} // 'YYYY-MM-DD': {event, fruit}
 };
-let S=load();
 function id(){return 'x'+Math.random().toString(36).slice(2,9)}
-function load(){try{const r=localStorage.getItem(KEY);if(r){const s=JSON.parse(r);if(!s.goals)s.goals=JSON.parse(JSON.stringify(DEFAULT.goals));return s;}}catch(e){}return JSON.parse(JSON.stringify(DEFAULT));}
-function save(){try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){}}
 
-  let editMode=false, editingPid=null, editingCid=null, editingDay=null;
-  const EDIT_PASSWORD = 'zion2026';
+/* ============================================================
+   SHARED CLOUD DATA (Firebase Realtime Database)
+   ── Paste your own Firebase config below. Until you do, the
+      board runs in LOCAL mode (saved only on this device).
+   ── When configured, ALL visitors see the same live data and
+      any edit is shared with everyone instantly.
+   ============================================================ */
+const FIREBASE_CONFIG = {
+  apiKey:      "PASTE_API_KEY",
+  authDomain:  "PASTE_PROJECT.firebaseapp.com",
+  databaseURL: "https://PASTE_PROJECT-default-rtdb.firebaseio.com",
+  projectId:   "PASTE_PROJECT"
+};
+const DB_PATH = "festival/2026";   // where the board's data lives in your database
+
+let S = JSON.parse(JSON.stringify(DEFAULT)); // working state (replaced once backend loads)
+let db=null, useFirebase=false, lastWritten='', backendReady=false;
+
+function migrate(s){ if(!s.goals)s.goals=JSON.parse(JSON.stringify(DEFAULT.goals)); if(!s.points)s.points=JSON.parse(JSON.stringify(DEFAULT.points)); if(!s.days)s.days={}; if(!s.participants)s.participants=[]; if(!s.candidates)s.candidates=[]; return s; }
+
+function configured(){ return FIREBASE_CONFIG.apiKey && !FIREBASE_CONFIG.apiKey.includes('PASTE'); }
+
+function save(){
+  if(useFirebase && db){
+    lastWritten = JSON.stringify(S);
+    db.ref(DB_PATH).set(S).then(()=>setStatus('live')).catch(e=>{console.error('Save failed',e);setStatus('error');});
+  } else {
+    try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){}
+  }
+}
+
+function loadLocal(){ try{const r=localStorage.getItem(KEY);if(r)return migrate(JSON.parse(r));}catch(e){} return JSON.parse(JSON.stringify(DEFAULT)); }
+
+function initBackend(){
+  if(configured() && window.firebase){
+    try{
+      firebase.initializeApp(FIREBASE_CONFIG);
+      db = firebase.database();
+      useFirebase = true;
+      setStatus('connecting');
+      db.ref(DB_PATH).on('value', snap=>{
+        const val = snap.val();
+        if(val){
+          const incoming = JSON.stringify(val);
+          if(incoming === lastWritten){ setStatus('live'); return; } // ignore our own echo
+          S = migrate(val);
+          render();
+          setStatus('live');
+        } else {
+          // database empty → seed it with the starter data once
+          S = JSON.parse(JSON.stringify(DEFAULT));
+          backendReady = true;
+          save();
+          render();
+        }
+        backendReady = true;
+      }, err=>{ console.error('DB read error',err); setStatus('error'); useFirebase=false; S=loadLocal(); render(); });
+      return;
+    }catch(e){ console.error('Firebase init failed',e); }
+  }
+  // LOCAL fallback
+  useFirebase = false;
+  S = loadLocal();
+  setStatus('local');
+  render();
+}
+
+function setStatus(state){
+  const el=document.getElementById('netStatus'); if(!el)return;
+  const map={
+    live:{t:'Live · shared',c:'#3FA174',d:true},
+    connecting:{t:'Connecting…',c:'#D99B2B',d:true},
+    error:{t:'Offline — retrying',c:'#EF5E2E',d:false},
+    local:{t:'Local mode (not shared)',c:'#9C8E78',d:false}
+  };
+  const m=map[state]||map.local;
+  el.innerHTML=`<span class="ns-dot" style="background:${m.c};${m.d?'box-shadow:0 0 0 4px '+m.c+'22;animation:nspulse 1.8s ease-in-out infinite':''}"></span>${m.t}`;
+}
+
+let editMode=false, editingPid=null, editingCid=null, editingDay=null;
 
 /* ============================== HELPERS ============================== */
 function scoreOf(p){const k=S.points;return p.simple*k.simple+p.valid*k.valid+p.baptism*k.baptism+p.worship*k.worship;}
@@ -887,11 +970,6 @@ function countUp(){
 
 /* ============================== EDIT ACTIONS ============================== */
 function toggleEdit(){
-  if(!editMode){
-    const pw=prompt('Enter the editor password to unlock editing:');
-    if(pw===null)return;
-    if(pw!==EDIT_PASSWORD){toast('❌ Incorrect password');return;}
-  }
   editMode=!editMode;
   document.body.classList.toggle('edit-on',editMode);
   document.getElementById('editBtn').classList.toggle('primary',editMode);
@@ -1040,7 +1118,7 @@ function runConfetti(){cx.clearRect(0,0,cc.width,cc.height);parts=parts.filter(p
   if(parts.length){requestAnimationFrame(runConfetti);}else{parts._run=false;cx.clearRect(0,0,cc.width,cc.height);}}
 
 /* ============================== INIT ============================== */
-render();
+initBackend();   // connects to shared cloud data, then renders
 // refresh day progress every hour
 setInterval(renderProgress,3600000);
 </script>
