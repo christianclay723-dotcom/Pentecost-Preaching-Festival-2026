@@ -1,0 +1,19 @@
+[debug] [2026-05-31T02:16:47.786Z] ----------------------------------------------------------------------
+[debug] [2026-05-31T02:16:47.788Z] Command:       C:\Users\Chris\DOWNLO~1\firebase-tools-instant-win.exe C:\Users\Chris\.cache\firebase\tools\lib\node_modules\firebase-tools\lib\bin\firebase init
+[debug] [2026-05-31T02:16:47.789Z] CLI Version:   15.19.0
+[debug] [2026-05-31T02:16:47.789Z] Platform:      win32
+[debug] [2026-05-31T02:16:47.789Z] Node Version:  v20.18.2
+[debug] [2026-05-31T02:16:47.789Z] Time:          Sat May 30 2026 19:16:47 GMT-0700 (Pacific Daylight Time)
+[debug] [2026-05-31T02:16:47.789Z] ----------------------------------------------------------------------
+[debug] 
+[info] 
+     ######## #### ########  ######## ########     ###     ######  ########
+     ##        ##  ##     ## ##       ##     ##  ##   ##  ##       ##
+     ######    ##  ########  ######   ########  #########  ######  ######
+     ##        ##  ##    ##  ##       ##     ## ##     ##       ## ##
+     ##       #### ##     ## ######## ########  ##     ##  ######  ########
+
+You're about to initialize a Firebase project in this directory:
+
+  C:\Users\Chris\Downloads
+
