@@ -636,7 +636,7 @@ body.tv .lb-list::after{content:"";display:block}
 
 <!-- Firebase (shared cloud data). Safe to leave even in local mode. -->
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script>
 /* ============================== STATE ============================== */
 const KEY='pentecost_festival_2026_v1';
@@ -675,34 +675,44 @@ const DEFAULT={
 function id(){return 'x'+Math.random().toString(36).slice(2,9)}
 
 /* ============================================================
-   SHARED CLOUD DATA (Firebase Realtime Database)
-   ── Paste your own Firebase config below. Until you do, the
-      board runs in LOCAL mode (saved only on this device).
-   ── When configured, ALL visitors see the same live data and
-      any edit is shared with everyone instantly.
+   SHARED CLOUD DATA (Cloud Firestore)
+   ── ALL visitors see the same live data; any edit is shared
+      with everyone instantly. The whole board is stored as ONE
+      Firestore document so it stays simple and atomic.
    ============================================================ */
 const FIREBASE_CONFIG = {
-  apiKey: "AIzaSyDJs_lBft75ewd4W_896i-N-1_RGimwPso",
-  authDomain: "cupertino-zion-festival.firebaseapp.com",
-  projectId: "cupertino-zion-festival",
-  storageBucket: "cupertino-zion-festival.firebasestorage.app",
+  apiKey:            "AIzaSyDJs_lBft75ewd4W_896i-N-1_RGimwPso",
+  authDomain:        "cupertino-zion-festival.firebaseapp.com",
+  projectId:         "cupertino-zion-festival",
+  storageBucket:     "cupertino-zion-festival.firebasestorage.app",
   messagingSenderId: "983567774973",
-  appId: "1:983567774973:web:b38de6458ac6c527bcfa94",
-  measurementId: "G-NXBTBW1RMM"
+  appId:             "1:983567774973:web:b38de6458ac6c527bcfa94",
+  measurementId:     "G-NXBTBW1RMM"
 };
-const DB_PATH = "festival/2026";   // where the board's data lives in your database
+const DOC_COLLECTION = "festival";   // Firestore collection
+const DOC_ID         = "board2026";  // document that holds the whole board
 
 let S = JSON.parse(JSON.stringify(DEFAULT)); // working state (replaced once backend loads)
-let db=null, useFirebase=false, lastWritten='', backendReady=false;
+let db=null, docRef=null, useFirebase=false, lastWritten='', backendReady=false, saveTimer=null;
 
 function migrate(s){ if(!s.goals)s.goals=JSON.parse(JSON.stringify(DEFAULT.goals)); if(!s.points)s.points=JSON.parse(JSON.stringify(DEFAULT.points)); if(!s.days)s.days={}; if(!s.participants)s.participants=[]; if(!s.candidates)s.candidates=[]; return s; }
 
 function configured(){ return FIREBASE_CONFIG.apiKey && !FIREBASE_CONFIG.apiKey.includes('PASTE'); }
 
+// Firestore rejects `undefined`; strip any before writing.
+function clean(o){ return JSON.parse(JSON.stringify(o)); }
+
 function save(){
-  if(useFirebase && db){
-    lastWritten = JSON.stringify(S);
-    db.ref(DB_PATH).set(S).then(()=>setStatus('live')).catch(e=>{console.error('Save failed',e);setStatus('error');});
+  if(useFirebase && docRef){
+    setStatus('saving');
+    // small debounce so rapid +/- taps don't fire a write per tap
+    clearTimeout(saveTimer);
+    saveTimer=setTimeout(()=>{
+      const payload=clean(S);
+      lastWritten=JSON.stringify(payload);
+      docRef.set(payload).then(()=>setStatus('live'))
+        .catch(e=>{console.error('Save failed',e);setStatus('error');});
+    },180);
   } else {
     try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){}
   }
@@ -714,26 +724,37 @@ function initBackend(){
   if(configured() && window.firebase){
     try{
       firebase.initializeApp(FIREBASE_CONFIG);
-      db = firebase.database();
+      db = firebase.firestore();
+      docRef = db.collection(DOC_COLLECTION).doc(DOC_ID);
       useFirebase = true;
       setStatus('connecting');
-      db.ref(DB_PATH).on('value', snap=>{
-        const val = snap.val();
-        if(val){
+
+      // safety: if nothing comes back quickly, surface a clear hint
+      const watchdog=setTimeout(()=>{ if(!backendReady) setStatus('error'); },9000);
+
+      docRef.onSnapshot({includeMetadataChanges:false}, snap=>{
+        clearTimeout(watchdog);
+        if(snap.exists){
+          const val = snap.data();
           const incoming = JSON.stringify(val);
+          backendReady = true;
           if(incoming === lastWritten){ setStatus('live'); return; } // ignore our own echo
           S = migrate(val);
           render();
           setStatus('live');
         } else {
-          // database empty → seed it with the starter data once
+          // document doesn't exist yet → seed it once with starter data
           S = JSON.parse(JSON.stringify(DEFAULT));
           backendReady = true;
           save();
           render();
         }
-        backendReady = true;
-      }, err=>{ console.error('DB read error',err); setStatus('error'); useFirebase=false; S=loadLocal(); render(); });
+      }, err=>{
+        clearTimeout(watchdog);
+        console.error('Firestore read error',err);
+        setStatus('error');
+        useFirebase=false; S=loadLocal(); render();
+      });
       return;
     }catch(e){ console.error('Firebase init failed',e); }
   }
@@ -748,8 +769,9 @@ function setStatus(state){
   const el=document.getElementById('netStatus'); if(!el)return;
   const map={
     live:{t:'Live · shared',c:'#3FA174',d:true},
+    saving:{t:'Saving…',c:'#5B97D6',d:true},
     connecting:{t:'Connecting…',c:'#D99B2B',d:true},
-    error:{t:'Offline — retrying',c:'#EF5E2E',d:false},
+    error:{t:'Connection issue — check rules',c:'#EF5E2E',d:false},
     local:{t:'Local mode (not shared)',c:'#9C8E78',d:false}
   };
   const m=map[state]||map.local;
